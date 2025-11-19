@@ -25,4 +25,4 @@ jobs:
         env:
           FIREBASE_SA_KEY: ${{ secrets.FIREBASE_SA_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
-        run: node scripts/updateRates.js
+        run: node updateRates.js
