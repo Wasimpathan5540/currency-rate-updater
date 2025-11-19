@@ -82,16 +82,12 @@ async function main() {
 
     const base = result.data.base || "USD";
 
-    const updates = {};
-    updates["/exchangeRates"] = rates;
-    updates["/exchangeRates/rates"] = rates;
-    updates["/exchangeRates_meta"] = {
-      base,
-      lastUpdated: admin.database.ServerValue.TIMESTAMP,
-      provider: api.name
-    };
+ 
+const updates = {};
+updates["/exchangeRates/rates"] = rates;
+updates["/exchangeRates_meta"] = { base, lastUpdated: admin.database.ServerValue.TIMESTAMP, provider: api.name };
+await db.ref().update(updates);
 
-    await db.ref().update(updates);
     console.log("Updated successfully:", Object.keys(rates).length, "rates");
     return process.exit(0);
   }
