@@ -2,13 +2,12 @@ name: Update Exchange Rates
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # every 30 minutes; adjust as needed
-  workflow_dispatch: {}
+    - cron: '*/30 * * * *'   # every 30 minutes
+  workflow_dispatch: {}      # allow manual runs
 
 jobs:
   update:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,10 +18,13 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        # prefer a clean install to ensure firebase-admin & axios are available
+        run: npm ci
+        # if you don't have package-lock.json, replace the above with:
+        # run: npm install firebase-admin axios
 
       - name: Run updater
         env:
           FIREBASE_SA_KEY: ${{ secrets.FIREBASE_SA_KEY }}
-          DB_URL: "https://currencyconverter-48640-default-rtdb.firebaseio.com" # make sure this matches YOUR Firebase DB URL
-        run: npm start
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+        run: node scripts/updateRates.js
