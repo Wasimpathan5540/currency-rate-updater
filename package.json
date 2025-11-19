@@ -1,0 +1,13 @@
+{
+  "name": "currency-rate-updater",
+  "version": "1.0.0",
+  "description": "Simple GitHub Actions updater that writes exchange rates to Firebase Realtime Database",
+  "main": "updateRates.js",
+  "scripts": {
+    "start": "node updateRates.js"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "firebase-admin": "^11.11.0"
+  }
+}
