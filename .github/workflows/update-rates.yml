@@ -23,6 +23,6 @@ jobs:
 
       - name: Run updater
         env:
-          FIREBASE_SA_KEY: ${{ secrets/FIREBASE_SA_KEY }}
-          DB_URL: "https://<your-project-id>.firebaseio.com" # REPLACE <your-project-id>
+          FIREBASE_SA_KEY: ${{ secrets.FIREBASE_SA_KEY }}
+          DB_URL: "https://currencyconverter-48640-default-rtdb.firebaseio.com" # ← make sure this matches YOUR Firebase DB URL
         run: npm start
