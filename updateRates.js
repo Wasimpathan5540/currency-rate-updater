@@ -1,12 +1,16 @@
-// updateRates.js - tries several free APIs and writes the first valid rates result
+// scripts/updateRates.js
 const admin = require("firebase-admin");
 const axios = require("axios");
 
 const SA_JSON = process.env.FIREBASE_SA_KEY;
-const DB_URL = process.env.DB_URL || "https://currencyconverter-48640-default-rtdb.firebaseio.com";
+const DB_URL = process.env.FIREBASE_DB_URL; // recommended env name
 
 if (!SA_JSON) {
   console.error("Missing FIREBASE_SA_KEY environment variable.");
+  process.exit(1);
+}
+if (!DB_URL) {
+  console.error("Missing FIREBASE_DB_URL environment variable.");
   process.exit(1);
 }
 
@@ -23,6 +27,8 @@ admin.initializeApp({
   databaseURL: DB_URL
 });
 
+const db = admin.database();
+
 async function tryFetch(url, options = {}) {
   try {
     const res = await axios.get(url, options);
@@ -36,21 +42,44 @@ function extractRates(apiData) {
   if (!apiData) return null;
   if (apiData.rates && typeof apiData.rates === "object") return apiData.rates;
   if (apiData.data && apiData.data.rates && typeof apiData.data.rates === "object") return apiData.data.rates;
-  // Some APIs use 'rates' nested under another key
   for (const k of Object.keys(apiData)) {
     if (apiData[k] && typeof apiData[k] === "object" && apiData[k].rates && typeof apiData[k].rates === "object") {
       return apiData[k].rates;
     }
   }
-  // Some APIs (like open.er-api.com) return `rates` under top-level as well but with different shape - already covered.
   return null;
+}
+
+function normalizeRates(rawRates) {
+  const out = {};
+  for (const [k, v] of Object.entries(rawRates)) {
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isNaN(n)) out[k] = n;
+  }
+  return out;
+}
+
+async function writeDiagnostics(obj) {
+  try {
+    const trimmed = Object.assign({}, obj);
+    if (trimmed.apiPreview) {
+      let p = trimmed.apiPreview;
+      try { p = JSON.stringify(p); } catch(e) { p = String(p); }
+      if (p.length > 2000) p = p.slice(0, 2000) + "...(truncated)";
+      trimmed.apiPreview = p;
+    }
+    trimmed.time = Date.now();
+    await db.ref("exchangeRatesDiagnostics").push(trimmed);
+  } catch (e) {
+    console.error("Failed writing diagnostic:", e);
+  }
 }
 
 async function main() {
   const apis = [
     { name: "exchangerate.host", url: "https://api.exchangerate.host/latest?base=USD" },
-    { name: "open.er-api.com",  url: "https://open.er-api.com/v6/latest/USD" }, // alternative
-    { name: "frankfurter",      url: "https://api.frankfurter.app/latest?from=USD" } // different shape: rates is present
+    { name: "open.er-api.com",  url: "https://open.er-api.com/v6/latest/USD" },
+    { name: "frankfurter",      url: "https://api.frankfurter.app/latest?from=USD" }
   ];
 
   for (const api of apis) {
@@ -58,64 +87,48 @@ async function main() {
     const result = await tryFetch(api.url, { timeout: 15000 });
     if (!result.ok) {
       console.warn("Fetch failed:", result.url, result.error);
-      await admin.database().ref("exchangeRatesDiagnostics").push({
-        time: Date.now(),
-        api: api.name,
-        url: result.url,
-        fetchError: result.error
-      });
+      await writeDiagnostics({ api: api.name, url: result.url, fetchError: result.error });
       continue;
     }
 
-    // Log preview (trim to safe size)
     let preview;
     try {
       preview = JSON.stringify(result.data);
-      if (preview.length > 4000) preview = preview.slice(0, 4000) + "...(truncated)";
+      if (preview.length > 2000) preview = preview.slice(0, 2000) + "...(truncated)";
     } catch (e) {
       preview = String(result.data);
     }
-    console.log("API response preview for", api.name, ":", preview);
+    console.log("API preview:", preview);
 
-    // try extract rates
-    let rates = extractRates(result.data);
-
-    // frankfurter returns rates under `rates` but base is `base` or `from`. Normalize:
-    if (!rates && result.data && result.data.rates && typeof result.data.rates === "object") {
-      rates = result.data.rates;
-    }
-
-    if (!rates || Object.keys(rates).length === 0) {
+    let rawRates = extractRates(result.data);
+    if (!rawRates && result.data && result.data.rates) rawRates = result.data.rates;
+    if (!rawRates || Object.keys(rawRates).length === 0) {
       console.warn("No usable 'rates' in response from", api.name);
-      // save diagnostic
-      await admin.database().ref("exchangeRatesDiagnostics").push({
-        time: Date.now(),
-        api: api.name,
-        url: api.url,
-        apiPreview: result.data,
-        note: "No rates object found"
-      });
-      continue; // try next API
+      await writeDiagnostics({ api: api.name, url: api.url, apiPreview: result.data, note: "No rates object found" });
+      continue;
     }
 
-    // success: determine base
+    const rates = normalizeRates(rawRates);
+    if (Object.keys(rates).length === 0) {
+      await writeDiagnostics({ api: api.name, url: api.url, note: "Rates present but non-numeric after parsing", apiPreview: result.data });
+      continue;
+    }
+
     const base = result.data.base || result.data.base_code || result.data.baseCurrency || result.data.query?.base || "USD";
-    const timestamp = Math.floor(Date.now() / 1000);
+    const lastUpdated = Date.now();
 
-    const payload = {
-      base: base || "USD",
-      timestamp,
-      rates
-    };
+    // Write atomically: rates under /exchangeRates/rates and a flat copy for older clients
+    const updates = {};
+    updates["/exchangeRates/rates"] = rates;
+    updates["/exchangeRates_flat"] = rates; // optional: backward compatibility
+    updates["/exchangeRates_meta"] = { base, lastUpdated, provider: api.name };
 
-    console.log("Writing payload to DB. base:", payload.base, "ratesCount:", Object.keys(rates).length);
-    await admin.database().ref("exchangeRates").set(payload);
-    console.log("Rates updated at:", new Date(timestamp * 1000).toISOString(), "from", api.name);
+    await db.ref().update(updates);
+    console.log("Successfully updated rates from", api.name, "count:", Object.keys(rates).length);
     return process.exit(0);
   }
 
-  // If we reach here, none of the APIs returned usable rates
-  console.error("All APIs failed to provide rates. See diagnostics in 'exchangeRatesDiagnostics'.");
+  console.error("All APIs failed to provide rates. See exchangeRatesDiagnostics.");
   process.exit(1);
 }
 
