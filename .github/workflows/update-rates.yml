@@ -1,0 +1,28 @@
+name: Update Exchange Rates
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every 30 minutes; adjust as needed
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run updater
+        env:
+          FIREBASE_SA_KEY: ${{ secrets/FIREBASE_SA_KEY }}
+          DB_URL: "https://<your-project-id>.firebaseio.com" # REPLACE <your-project-id>
+        run: npm start
